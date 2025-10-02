@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime
 from enum import StrEnum
 from functools import partial
@@ -36,6 +37,16 @@ CONFIG_DIR = PosixPath("~/.anthropic").expanduser()
 API_KEY_FILE = CONFIG_DIR / "api_key"
 STREAMLIT_STYLE = """
 <style>
+    /* Highlight the stop button in red */
+    button[kind=header] {
+        background-color: rgb(255, 75, 75);
+        border: 1px solid rgb(255, 75, 75);
+        color: rgb(255, 255, 255);
+    }
+    button[kind=header]:hover {
+        background-color: rgb(255, 50, 50);
+        border: 1px solid rgb(255, 50, 50);
+    }
     /* Hide chat input while agent loop is running */
     .stApp[data-teststate=running] .stChatInput textarea,
     .stApp[data-test-script-state=running] .stChatInput textarea {
@@ -48,7 +59,9 @@ STREAMLIT_STYLE = """
 </style>
 """
 
-WARNING_TEXT = ""
+WARNING_TEXT = "⚠️ Security Alert: Never provide access to sensitive accounts or data, as malicious web content can hijack Claude's behavior"
+INTERRUPT_TEXT = "(user stopped or interrupted and wrote the following)"
+INTERRUPT_TOOL_ERROR = "human stopped or interrupted tool execution"
 
 
 class Sender(StrEnum):
@@ -85,6 +98,8 @@ def setup_state():
         st.session_state.custom_system_prompt = load_from_storage("system_prompt") or ""
     if "hide_images" not in st.session_state:
         st.session_state.hide_images = False
+    if "in_sampling_loop" not in st.session_state:
+        st.session_state.in_sampling_loop = False
 
 
 def _reset_model():
@@ -100,6 +115,9 @@ async def main():
     st.markdown(STREAMLIT_STYLE, unsafe_allow_html=True)
 
     st.title("Claude Computer Use for Mac")
+
+    if WARNING_TEXT:
+        st.warning(WARNING_TEXT)
 
     st.markdown("""This is from [Mac Computer Use](https://github.com/deedy/mac_computer_use), a fork of [Anthropic Computer Use](https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/README.md) to work natively on Mac.""")
 
@@ -197,7 +215,10 @@ async def main():
             st.session_state.messages.append(
                 {
                     "role": Sender.USER,
-                    "content": [TextBlock(type="text", text=new_message)],
+                    "content": [
+                        *maybe_add_interruption_blocks(),
+                        TextBlock(type="text", text=new_message),
+                    ],
                 }
             )
             _render_message(Sender.USER, new_message)
@@ -211,7 +232,7 @@ async def main():
             # we don't have a user message to respond to, exit early
             return
 
-        with st.spinner("Running Agent..."):
+        with track_sampling_loop():
             # run the agent sampling loop with the newest message
             st.session_state.messages = await sampling_loop(
                 system_prompt_suffix=st.session_state.custom_system_prompt,
@@ -230,6 +251,37 @@ async def main():
                 api_key=st.session_state.api_key,
                 only_n_most_recent_images=st.session_state.only_n_most_recent_images,
             )
+
+
+@contextmanager
+def track_sampling_loop():
+    st.session_state.in_sampling_loop = True
+    yield
+    st.session_state.in_sampling_loop = False
+
+
+def maybe_add_interruption_blocks():
+    if not st.session_state.in_sampling_loop:
+        return []
+    # If this function is called while we're in the sampling loop, we can assume that the previous sampling loop was interrupted
+    # and we should annotate the conversation with additional context for the model and heal any incomplete tool use calls
+    result = []
+    last_message = st.session_state.messages[-1]
+    previous_tool_use_ids = [
+        block["id"] for block in last_message["content"] if block["type"] == "tool_use"
+    ]
+    for tool_use_id in previous_tool_use_ids:
+        st.session_state.tools[tool_use_id] = ToolResult(error=INTERRUPT_TOOL_ERROR)
+        result.append(
+            {
+                "tool_use_id": tool_use_id,
+                "type": "tool_result",
+                "content": INTERRUPT_TOOL_ERROR,
+                "is_error": True,
+            }
+        )
+    result.append({"type": "text", "text": INTERRUPT_TEXT})
+    return result
 
 
 def validate_auth(provider: APIProvider, api_key: str | None):

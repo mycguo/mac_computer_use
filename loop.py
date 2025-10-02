@@ -24,7 +24,7 @@ from anthropic.types.beta import (
 
 from tools import BashTool, ComputerTool, EditTool, ToolCollection, ToolResult
 
-BETA_FLAG = "computer-use-2024-10-22"
+BETA_FLAG = "computer-use-2025-01-24"
 
 
 class APIProvider(StrEnum):
@@ -34,7 +34,7 @@ class APIProvider(StrEnum):
 
 
 PROVIDER_TO_DEFAULT_MODEL_NAME: dict[APIProvider, str] = {
-    APIProvider.ANTHROPIC: "claude-3-5-sonnet-20241022",
+    APIProvider.ANTHROPIC: "claude-sonnet-4-5-20250929",
     APIProvider.BEDROCK: "anthropic.claude-3-5-sonnet-20241022-v2:0",
     APIProvider.VERTEX: "claude-3-5-sonnet-v2@20241022",
 }
